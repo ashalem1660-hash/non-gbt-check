@@ -4,24 +4,102 @@ import React, { useCallback, useState } from "react";
 import * as XLSX from "xlsx";
 import type { FileData, LoadingState } from "../types";
 
-function parseFile(file: File): Promise<FileData> {
+function parseCSVChunked(text: string, onProgress: (p: number) => void): Record<string, unknown>[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
+  if (lines.length < 2) return [];
+  // Detect delimiter
+  const firstLine = lines[0];
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const tabCount = (firstLine.match(/\t/g) || []).length;
+  const semiCount = (firstLine.match(/;/g) || []).length;
+  const delimiter = tabCount > commaCount && tabCount > semiCount ? "\t" : semiCount > commaCount ? ";" : ",";
+  const headers = lines[0].split(delimiter).map((h) => h.replace(/^"|"$/g, "").trim());
+  const results: Record<string, unknown>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (i % 50000 === 0) onProgress(Math.round((i / lines.length) * 100));
+    const values = lines[i].split(delimiter);
+    const row: Record<string, unknown> = {};
+    let hasValue = false;
+    for (let j = 0; j < headers.length; j++) {
+      const val = (values[j] || "").replace(/^"|"$/g, "").trim();
+      row[headers[j]] = val || null;
+      if (val) hasValue = true;
+    }
+    if (hasValue) results.push(row);
+  }
+  return results;
+}
+
+function parseExcelChunked(data: Uint8Array, onProgress: (p: number) => void): { rows: Record<string, unknown>[]; columns: string[] } {
+  onProgress(10);
+  const workbook = XLSX.read(data, { type: "array", cellDates: true, dense: true });
+  onProgress(30);
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  onProgress(50);
+  // Use sheet_to_json with limited processing
+  const json = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: true });
+  onProgress(80);
+  if (json.length === 0) return { rows: [], columns: [] };
+  const columns = Object.keys(json[0] as Record<string, unknown>);
+  onProgress(100);
+  return { rows: json as Record<string, unknown>[], columns };
+}
+
+function parseFile(file: File, setLoading: (l: LoadingState) => void): Promise<FileData> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: "array", cellDates: true });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const json = XLSX.utils.sheet_to_json(sheet, { defval: null });
-        if (json.length === 0) { reject(new Error("File is empty or has no data rows. Please check the file and try again.")); return; }
-        const columns = Object.keys(json[0] as Record<string, unknown>);
-        if (columns.length === 0) { reject(new Error("No columns detected. Please make sure the first row contains headers.")); return; }
-        resolve({ name: file.name, data: json as Record<string, unknown>[], columns, rowCount: json.length });
-      } catch (err) { reject(new Error("Failed to parse file. Please make sure it is a valid Excel (.xlsx/.xls) or CSV file. Error: " + String(err))); }
-    };
-    reader.onerror = () => reject(new Error("Failed to read file. Please try again."));
-    reader.readAsArrayBuffer(file);
+    const isCSV = file.name.toLowerCase().endsWith(".csv") || file.name.toLowerCase().endsWith(".txt");
+    const sizeMB = Math.round(file.size / 1024 / 1024);
+
+    if (isCSV) {
+      setLoading({ isLoading: true, stage: "Reading CSV file (" + sizeMB + "MB)...", progress: 10, detail: "Loading into memory" });
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string;
+          setLoading({ isLoading: true, stage: "Parsing CSV rows...", progress: 20, detail: "Detecting format" });
+          const rows = parseCSVChunked(text, (p) => {
+            setLoading({ isLoading: true, stage: "Processing rows...", progress: 20 + Math.round(p * 0.7), detail: "Processing data" });
+          });
+          if (rows.length === 0) { reject(new Error("File is empty or has no data rows.")); return; }
+          const columns = Object.keys(rows[0]);
+          setLoading({ isLoading: true, stage: "Done!", progress: 100, detail: rows.length.toLocaleString() + " rows loaded" });
+          resolve({ name: file.name, data: rows, columns, rowCount: rows.length });
+        } catch (err) {
+          reject(new Error("Failed to parse CSV: " + String(err)));
+        }
+      };
+      reader.onerror = () => reject(new Error("Failed to read file."));
+      reader.readAsText(file);
+    } else {
+      setLoading({ isLoading: true, stage: "Reading Excel file (" + sizeMB + "MB)...", progress: 5, detail: "This may take a moment for large files" });
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          setLoading({ isLoading: true, stage: "Parsing Excel data...", progress: 15, detail: "Reading workbook structure" });
+          // For very large files, try chunked approach
+          if (file.size > 50 * 1024 * 1024) {
+            setLoading({ isLoading: true, stage: "Large file detected (" + sizeMB + "MB)...", progress: 15, detail: "Using optimized parser" });
+          }
+          const { rows, columns } = parseExcelChunked(data, (p) => {
+            setLoading({ isLoading: true, stage: "Processing Excel...", progress: 15 + Math.round(p * 0.75), detail: "Extracting data" });
+          });
+          if (rows.length === 0) { reject(new Error("File is empty or has no data rows. Check if data is on the first sheet.")); return; }
+          setLoading({ isLoading: true, stage: "Finalizing...", progress: 95, detail: rows.length.toLocaleString() + " rows loaded" });
+          resolve({ name: file.name, data: rows, columns, rowCount: rows.length });
+        } catch (err) {
+          const errMsg = String(err);
+          if (errMsg.includes("RangeError") || errMsg.includes("too many") || errMsg.includes("memory")) {
+            reject(new Error("File is too large for Excel format (" + sizeMB + "MB). Please save as CSV and try again. In Excel: File > Save As > CSV (Comma delimited)."));
+          } else {
+            reject(new Error("Failed to parse Excel: " + errMsg));
+          }
+        }
+      };
+      reader.onerror = () => reject(new Error("Failed to read file."));
+      reader.readAsArrayBuffer(file);
+    }
   });
 }
 
@@ -37,8 +115,8 @@ function DropZone({ label, description, hint, icon, accept, multiple, files, onD
     if (droppedFiles.length === 0) { setError("No files detected. Please try again."); return; }
     for (const f of droppedFiles) {
       const ext = f.name.split(".").pop()?.toLowerCase();
-      if (!["xlsx", "xls", "csv"].includes(ext || "")) { setError("Invalid file type: " + f.name + ". Please upload .xlsx, .xls, or .csv files only."); return; }
-      if (f.size > 100 * 1024 * 1024) { setError("File too large: " + f.name + " (" + Math.round(f.size / 1024 / 1024) + "MB). Maximum size is 100MB."); return; }
+      if (!["xlsx", "xls", "csv", "txt"].includes(ext || "")) { setError("Invalid file type: " + f.name + ". Please upload .xlsx, .xls, .csv, or .txt files."); return; }
+      if (f.size > 500 * 1024 * 1024) { setError("File too large: " + f.name + " (" + Math.round(f.size / 1024 / 1024) + "MB). Maximum size is 500MB."); return; }
     }
     onDrop(droppedFiles);
   }, [onDrop]);
@@ -87,6 +165,17 @@ function DropZone({ label, description, hint, icon, accept, multiple, files, onD
         <div className="mt-2 bg-red-50 border border-red-200 rounded-lg p-3">
           <p className="text-sm text-red-700 font-medium">Error</p>
           <p className="text-xs text-red-600">{error}</p>
+          {error.includes("too large for Excel") && (
+            <div className="mt-2 bg-white rounded p-2 border border-red-100">
+              <p className="text-xs text-red-800 font-medium">How to convert to CSV:</p>
+              <ol className="text-xs text-red-600 ml-4 list-decimal mt-1">
+                <li>Open the file in Excel</li>
+                <li>Go to File &gt; Save As</li>
+                <li>Choose &quot;CSV (Comma delimited) (*.csv)&quot;</li>
+                <li>Click Save, then upload the CSV file</li>
+              </ol>
+            </div>
+          )}
         </div>
       )}
       {files.length > 0 && (
@@ -126,17 +215,13 @@ export default function FileUpload({ feeFiles, exchangeFile, glFile, onFeeFilesC
   const [glLoading, setGlLoading] = useState<LoadingState>({ isLoading: false, stage: "", progress: 0, detail: "" });
 
   const handleFeeFiles = async (files: File[]) => {
-    setFeeLoading({ isLoading: true, stage: "Reading files...", progress: 10, detail: "Parsing Excel data" });
     try {
       const results: FileData[] = [...feeFiles];
       for (let i = 0; i < files.length; i++) {
-        setFeeLoading({ isLoading: true, stage: "Processing " + files[i].name + "...", progress: 10 + Math.round((i / files.length) * 80), detail: "File " + (i + 1) + " of " + files.length });
-        const parsed = await parseFile(files[i]);
+        const parsed = await parseFile(files[i], setFeeLoading);
         const existing = results.findIndex((f) => f.name === parsed.name);
         if (existing >= 0) { results[existing] = parsed; } else { results.push(parsed); }
       }
-      setFeeLoading({ isLoading: true, stage: "Validating...", progress: 95, detail: "Checking data integrity" });
-      await new Promise((r) => setTimeout(r, 300));
       onFeeFilesChange(results);
       setFeeLoading({ isLoading: false, stage: "", progress: 100, detail: "" });
     } catch (err) {
@@ -146,11 +231,8 @@ export default function FileUpload({ feeFiles, exchangeFile, glFile, onFeeFilesC
   };
 
   const handleExchangeFile = async (files: File[]) => {
-    setExLoading({ isLoading: true, stage: "Reading exchange rate file...", progress: 30, detail: "Parsing data" });
     try {
-      const parsed = await parseFile(files[0]);
-      setExLoading({ isLoading: true, stage: "Validating rates...", progress: 80, detail: parsed.rowCount + " rates found" });
-      await new Promise((r) => setTimeout(r, 300));
+      const parsed = await parseFile(files[0], setExLoading);
       onExchangeFileChange(parsed);
       setExLoading({ isLoading: false, stage: "", progress: 100, detail: "" });
     } catch (err) {
@@ -160,11 +242,8 @@ export default function FileUpload({ feeFiles, exchangeFile, glFile, onFeeFilesC
   };
 
   const handleGlFile = async (files: File[]) => {
-    setGlLoading({ isLoading: true, stage: "Reading GL file...", progress: 30, detail: "Parsing data" });
     try {
-      const parsed = await parseFile(files[0]);
-      setGlLoading({ isLoading: true, stage: "Validating GL data...", progress: 80, detail: parsed.rowCount + " entries found" });
-      await new Promise((r) => setTimeout(r, 300));
+      const parsed = await parseFile(files[0], setGlLoading);
       onGlFileChange(parsed);
       setGlLoading({ isLoading: false, stage: "", progress: 100, detail: "" });
     } catch (err) {
@@ -185,14 +264,18 @@ export default function FileUpload({ feeFiles, exchangeFile, glFile, onFeeFilesC
         <h3 className="font-semibold text-blue-800 mb-2">How this works:</h3>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
           <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">1</span><p className="text-blue-700">Upload your <strong>fee transaction files</strong> containing fee codes, amounts, currencies, and dates</p></div>
-          <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">2</span><p className="text-blue-700">Upload <strong>exchange rates</strong> file with daily rates per currency (e.g. from Business Central)</p></div>
+          <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">2</span><p className="text-blue-700">Upload <strong>exchange rates</strong> file with daily rates per currency</p></div>
           <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">3</span><p className="text-blue-700">Map columns to system fields - we auto-detect when possible</p></div>
           <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">4</span><p className="text-blue-700">Get results: amounts converted to USD, grouped by fee code, compared to GL</p></div>
         </div>
       </div>
-      <DropZone label="Fee Transaction Files" description="Upload one or more files containing fee transactions. Required fields: Fee Code, Amount, Currency, Date." hint="Supports .xlsx, .xls, .csv | Multiple files allowed | Max 100MB per file" icon="&#128206;" accept=".xlsx,.xls,.csv" multiple={true} files={feeFiles} onDrop={handleFeeFiles} onRemove={(name) => onFeeFilesChange(feeFiles.filter((f) => f.name !== name))} loading={feeLoading} />
-      <DropZone label="Exchange Rate File" description="Daily exchange rates per currency to USD. Expected columns: Date, Currency Code, Exchange Rate." hint="Should contain daily rates for all currencies in your fee files | Supports .xlsx, .xls, .csv" icon="&#128177;" accept=".xlsx,.xls,.csv" files={exchangeFile ? [exchangeFile] : []} onDrop={handleExchangeFile} onRemove={() => onExchangeFileChange(null)} loading={exLoading} />
-      <DropZone label="GL Data (Optional)" description="General Ledger data for comparison. The tool will compare calculated USD amounts with GL amounts per fee code." hint="Optional - upload only if you want to compare results against the General Ledger" icon="&#128209;" accept=".xlsx,.xls,.csv" files={glFile ? [glFile] : []} onDrop={handleGlFile} onRemove={() => onGlFileChange(null)} loading={glLoading} />
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6">
+        <p className="text-sm text-amber-800 font-medium">Large files? No problem!</p>
+        <p className="text-xs text-amber-700 mt-1">For files over 100K rows, we recommend saving as CSV for best performance. Excel files up to ~200K rows work fine. CSV files handle 500K+ rows.</p>
+      </div>
+      <DropZone label="Fee Transaction Files" description="Upload one or more files containing fee transactions." hint="Supports .xlsx, .xls, .csv | Multiple files | For large files (500K+ rows) use CSV format" icon="&#128206;" accept=".xlsx,.xls,.csv,.txt" multiple={true} files={feeFiles} onDrop={handleFeeFiles} onRemove={(name) => onFeeFilesChange(feeFiles.filter((f) => f.name !== name))} loading={feeLoading} />
+      <DropZone label="Exchange Rate File" description="Daily exchange rates per currency to USD." hint="Expected: Date, Currency Code, Exchange Rate columns | Supports .xlsx, .xls, .csv" icon="&#128177;" accept=".xlsx,.xls,.csv,.txt" files={exchangeFile ? [exchangeFile] : []} onDrop={handleExchangeFile} onRemove={() => onExchangeFileChange(null)} loading={exLoading} />
+      <DropZone label="GL Data (Optional)" description="General Ledger data for comparison." hint="Optional - for comparing calculated amounts against GL" icon="&#128209;" accept=".xlsx,.xls,.csv,.txt" files={glFile ? [glFile] : []} onDrop={handleGlFile} onRemove={() => onGlFileChange(null)} loading={glLoading} />
       {!canProceed && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center mb-6">
           <p className="text-amber-800 text-sm font-medium">

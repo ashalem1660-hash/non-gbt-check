@@ -1,0 +1,1571 @@
+===== layout.tsx =====
+import type { Metadata } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "Non-GBT Completeness Check",
+  description: "Fee transaction analysis and GL reconciliation tool - Process fee files, convert currencies using daily exchange rates, and compare against General Ledger data.",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body className="antialiased">{children}</body>
+    </html>
+  );
+}
+
+===== page.tsx =====
+"use client";
+
+import React, { useState } from "react";
+import type { FileData, ColumnMapping, ProcessingResults, AppStep } from "../types";
+import FileUpload from "../components/FileUpload";
+import ColumnMappingComponent from "../components/ColumnMapping";
+import Review from "../components/Review";
+import Results from "../components/Results";
+import { processData } from "../lib/processing";
+
+const STEPS = [
+  { num: 1, label: "Upload Files", icon: "1" },
+  { num: 2, label: "Map Columns", icon: "2" },
+  { num: 3, label: "Review & Validate", icon: "3" },
+  { num: 4, label: "Results", icon: "4" },
+];
+
+function StepIndicator({ current }: { current: AppStep }) {
+  return (
+    <div className="flex items-center justify-center gap-2 mb-8">
+      {STEPS.map((step, i) => (
+        <React.Fragment key={step.num}>
+          <div className="flex items-center gap-2">
+            <div className={"w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold transition-all " + (step.num < current ? "bg-green-500 text-white" : step.num === current ? "bg-blue-600 text-white ring-4 ring-blue-200" : "bg-gray-200 text-gray-500")}>
+              {step.num < current ? "\u2713" : step.icon}
+            </div>
+            <span className={"text-sm font-medium hidden md:inline " + (step.num === current ? "text-blue-700" : step.num < current ? "text-green-600" : "text-gray-400")}>{step.label}</span>
+          </div>
+          {i < STEPS.length - 1 && <div className={"w-12 h-0.5 " + (step.num < current ? "bg-green-400" : "bg-gray-200")}></div>}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+export default function Home() {
+  const [step, setStep] = useState<AppStep>(1);
+  const [feeFiles, setFeeFiles] = useState<FileData[]>([]);
+  const [exchangeFile, setExchangeFile] = useState<FileData | null>(null);
+  const [glFile, setGlFile] = useState<FileData | null>(null);
+  const [feeMappings, setFeeMappings] = useState<Record<string, ColumnMapping>>({});
+  const [exchangeMapping, setExchangeMapping] = useState<ColumnMapping>({});
+  const [glMapping, setGlMapping] = useState<ColumnMapping>({});
+  const [results, setResults] = useState<ProcessingResults | null>(null);
+  const [processError, setProcessError] = useState<string | null>(null);
+
+  const handleProcess = () => {
+    try {
+      setProcessError(null);
+      if (!exchangeFile) { setProcessError("Exchange rate file is missing. Please go back and upload it."); return; }
+      const res = processData(feeFiles, feeMappings, exchangeFile, exchangeMapping, glFile || undefined, glFile ? glMapping : undefined);
+      if (res.totalRecords === 0 && res.errors && res.errors.length > 0) {
+        setProcessError("No records could be processed. " + res.errors.length + " errors found. Most common: " + res.errors[0].message + ". Please go back and check your column mappings.");
+        return;
+      }
+      setResults(res);
+      setStep(4);
+    } catch (err) {
+      setProcessError("Processing failed: " + String(err instanceof Error ? err.message : err) + ". Please check your files and mappings.");
+    }
+  };
+
+  const handleReset = () => {
+    setStep(1);
+    setFeeFiles([]);
+    setExchangeFile(null);
+    setGlFile(null);
+    setFeeMappings({});
+    setExchangeMapping({});
+    setGlMapping({});
+    setResults(null);
+    setProcessError(null);
+  };
+
+  return (
+    <main className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        <div className="text-center mb-6">
+          <h1 className="text-3xl font-bold text-gray-800">Non-GBT Completeness Check</h1>
+          <p className="text-gray-500 mt-1">Fee transaction analysis and GL reconciliation tool</p>
+        </div>
+        <StepIndicator current={step} />
+        {processError && (
+          <div className="bg-red-50 border border-red-300 rounded-xl p-4 mb-6 text-center">
+            <h3 className="font-semibold text-red-800 mb-1">Processing Error</h3>
+            <p className="text-sm text-red-700">{processError}</p>
+            <button onClick={() => { setProcessError(null); setStep(3); }} className="mt-2 text-sm text-red-700 font-semibold underline hover:text-red-900">Go back and fix</button>
+          </div>
+        )}
+        <div className="bg-white/80 backdrop-blur rounded-2xl shadow-lg p-6 md:p-8">
+          {step === 1 && (
+            <FileUpload feeFiles={feeFiles} exchangeFile={exchangeFile} glFile={glFile} onFeeFilesChange={setFeeFiles} onExchangeFileChange={setExchangeFile} onGlFileChange={setGlFile} onNext={() => setStep(2)} />
+          )}
+          {step === 2 && exchangeFile && (
+            <ColumnMappingComponent feeFiles={feeFiles} exchangeFile={exchangeFile} glFile={glFile} feeMappings={feeMappings} exchangeMapping={exchangeMapping} glMapping={glMapping} onFeeMappingsChange={setFeeMappings} onExchangeMappingChange={setExchangeMapping} onGlMappingChange={setGlMapping} onNext={() => setStep(3)} onBack={() => setStep(1)} />
+          )}
+          {step === 3 && exchangeFile && (
+            <Review feeFiles={feeFiles} exchangeFile={exchangeFile} glFile={glFile} feeMappings={feeMappings} exchangeMapping={exchangeMapping} glMapping={glMapping} onProcess={handleProcess} onBack={() => setStep(2)} />
+          )}
+          {step === 4 && results && (
+            <Results results={results} onBack={() => setStep(3)} onReset={handleReset} />
+          )}
+        </div>
+        <div className="text-center mt-6 text-xs text-gray-400">
+          <p>Non-GBT Completeness Check Tool | All data is processed locally in your browser | No data is sent to any server</p>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+===== ColumnMapping.tsx =====
+"use client";
+
+import React, { useEffect, useState } from "react";
+import type { FileData, ColumnMapping as ColumnMappingType, SavedMapping } from "../types";
+import { autoDetectMapping } from "../lib/fuzzyMatch";
+import { detectColumnType } from "../lib/processing";
+
+const FEE_FIELDS = [
+  { name: "Fee Code", description: "Fee code identifier", required: true, examples: "3004, 3032" },
+  { name: "Fee Amount", description: "Transaction amount", required: true, examples: "150.00, -23.50" },
+  { name: "Currency", description: "Currency code", required: true, examples: "USD, EUR, GBP" },
+  { name: "Transaction Date", description: "Date of transaction", required: true, examples: "2025-01-15" },
+];
+
+const EXCHANGE_FIELDS = [
+  { name: "Rate Date", description: "Date of exchange rate", required: true, examples: "2025-01-15" },
+  { name: "Currency Code", description: "Currency code", required: true, examples: "USD, EUR" },
+  { name: "Exchange Rate", description: "Exchange rate to USD", required: true, examples: "1.0, 0.92" },
+];
+
+const GL_FIELDS = [
+  { name: "Fee Code", description: "Fee code identifier", required: true, examples: "3004, 3032" },
+  { name: "GL Amount (USD)", description: "Ledger amount in USD", required: true, examples: "45230.00" },
+];
+
+function getPreview(data: Record<string, unknown>[], column: string): string {
+  return data.slice(0, 4).map((row) => String(row[column] ?? "")).filter(Boolean).join(", ");
+}
+
+function TypeBadge({ type }: { type: "text" | "numeric" | "date" }) {
+  const colors = { text: "bg-gray-100 text-gray-700", numeric: "bg-blue-100 text-blue-700", date: "bg-purple-100 text-purple-700" };
+  const icons = { text: "Aa", numeric: "#", date: "D" };
+  return <span className={"px-1.5 py-0.5 rounded text-xs font-bold " + colors[type]}>{icons[type]} {type}</span>;
+}
+
+function MappingCard({ file, fields, mapping, confidence, columnTypes, typeOverrides, onTypeOverride, onChange }: {
+  file: FileData;
+  fields: { name: string; description: string; required: boolean; examples: string }[];
+  mapping: ColumnMappingType;
+  confidence: Record<string, number>;
+  columnTypes: Record<string, { type: "text" | "numeric" | "date"; sample: string }>;
+  typeOverrides: Record<string, string>;
+  onTypeOverride: (col: string, type: string) => void;
+  onChange: (field: string, value: string | null) => void;
+}) {
+  const [showPreview, setShowPreview] = useState(false);
+  const [showTypes, setShowTypes] = useState(false);
+  const mappedCount = fields.filter((f) => mapping[f.name]).length;
+  const requiredCount = fields.filter((f) => f.required).length;
+  const requiredMapped = fields.filter((f) => f.required && mapping[f.name]).length;
+  const allRequiredMapped = requiredMapped === requiredCount;
+  return (
+    <div className={"bg-white rounded-xl border p-5 shadow-sm " + (allRequiredMapped ? "border-green-200" : "border-amber-300")}>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <span className={"w-2.5 h-2.5 rounded-full " + (allRequiredMapped ? "bg-green-500" : "bg-amber-500")}></span>
+          <h3 className="font-semibold text-gray-800">{file.name}</h3>
+          <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{file.rowCount.toLocaleString()} rows | {file.columns.length} cols</span>
+          <span className={"text-xs px-2 py-0.5 rounded-full font-medium " + (allRequiredMapped ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700")}>{mappedCount}/{fields.length} mapped</span>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => setShowTypes(!showTypes)} className="text-sm text-purple-600 hover:text-purple-800 font-medium">{showTypes ? "Hide Types" : "Column Types"}</button>
+          <button onClick={() => setShowPreview(!showPreview)} className="text-sm text-blue-600 hover:text-blue-800 font-medium">{showPreview ? "Hide Preview" : "Data Preview"}</button>
+        </div>
+      </div>
+      {showTypes && (
+        <div className="mb-4 bg-purple-50 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-purple-800 mb-3">Column Type Detection</h4>
+          <p className="text-xs text-purple-600 mb-3">Auto-detected types shown below. You can override if the detection is wrong.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {file.columns.map((col) => {
+              const detected = columnTypes[col] || { type: "text", sample: "" };
+              const overridden = typeOverrides[col];
+              return (
+                <div key={col} className="flex items-center gap-2 bg-white rounded-md px-3 py-2 border border-purple-200">
+                  <span className="text-sm text-gray-700 font-medium flex-1 truncate">{col}</span>
+                  <TypeBadge type={(overridden || detected.type) as "text" | "numeric" | "date"} />
+                  <select value={overridden || detected.type} onChange={(e) => onTypeOverride(col, e.target.value)} className="text-xs border border-gray-300 rounded px-1 py-0.5 bg-white">
+                    <option value="text">Text</option>
+                    <option value="numeric">Numeric</option>
+                    <option value="date">Date</option>
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {showPreview && (
+        <div className="mb-4 overflow-x-auto">
+          <table className="w-full text-xs border-collapse">
+            <thead><tr className="bg-gray-50">{file.columns.map((col) => {
+              const detected = columnTypes[col] || { type: "text" };
+              const overridden = typeOverrides[col];
+              return (<th key={col} className="border border-gray-200 px-2 py-1 text-left">
+                <div className="font-medium text-gray-600">{col}</div>
+                <TypeBadge type={(overridden || detected.type) as "text" | "numeric" | "date"} />
+              </th>);
+            })}</tr></thead>
+            <tbody>{file.data.slice(0, 5).map((row, i) => (<tr key={i}>{file.columns.map((col) => (<td key={col} className="border border-gray-200 px-2 py-1 text-gray-700">{String(row[col] ?? "")}</td>))}</tr>))}</tbody>
+          </table>
+        </div>
+      )}
+      {!allRequiredMapped && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <p className="text-sm text-amber-800 font-medium">Missing required mappings:</p>
+          <p className="text-sm text-amber-700">{fields.filter((f) => f.required && !mapping[f.name]).map((f) => f.name).join(", ")}</p>
+        </div>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {fields.map((field) => {
+          const conf = confidence[field.name] || 0;
+          const isMapped = mapping[field.name] !== null && mapping[field.name] !== undefined;
+          const bgColor = isMapped ? (conf >= 0.8 ? "bg-green-50" : "bg-blue-50") : (field.required ? "bg-red-50" : "bg-gray-50");
+          const borderColor = isMapped ? (conf >= 0.8 ? "border-green-300" : "border-blue-300") : (field.required ? "border-red-300" : "border-gray-200");
+          const confText = conf >= 0.8 ? "Auto-detected" : conf >= 0.5 ? "Possible match" : "";
+          const confColor = conf >= 0.8 ? "text-green-600" : "text-amber-600";
+          return (
+            <div key={field.name} className={"rounded-lg border p-3 " + bgColor + " " + borderColor}>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-sm text-gray-800">{field.name}</span>
+                  {field.required && <span className="text-red-500 text-xs font-bold">*</span>}
+                </div>
+                {conf > 0 && <span className={"text-xs font-medium " + confColor}>{confText} ({Math.round(conf * 100)}%)</span>}
+              </div>
+              <p className="text-xs text-gray-500 mb-2">{field.description} - e.g. {field.examples}</p>
+              <select value={mapping[field.name] || ""} onChange={(e) => onChange(field.name, e.target.value || null)} className="w-full rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                <option value="">-- Select column --</option>
+                {file.columns.map((col) => {
+                  const ct = columnTypes[col] || { type: "text" };
+                  const override = typeOverrides[col];
+                  const displayType = override || ct.type;
+                  return (<option key={col} value={col}>[{displayType}] {col}</option>);
+                })}
+              </select>
+              {mapping[field.name] && <p className="text-xs text-gray-500 mt-1 italic">Preview: {getPreview(file.data, mapping[field.name]!)}</p>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface ColumnMappingProps {
+  feeFiles: FileData[];
+  exchangeFile: FileData;
+  glFile: FileData | null;
+  feeMappings: Record<string, ColumnMappingType>;
+  exchangeMapping: ColumnMappingType;
+  glMapping: ColumnMappingType;
+  onFeeMappingsChange: (m: Record<string, ColumnMappingType>) => void;
+  onExchangeMappingChange: (m: ColumnMappingType) => void;
+  onGlMappingChange: (m: ColumnMappingType) => void;
+  onNext: () => void;
+  onBack: () => void;
+}
+
+export default function ColumnMapping({ feeFiles, exchangeFile, glFile, feeMappings, exchangeMapping, glMapping, onFeeMappingsChange, onExchangeMappingChange, onGlMappingChange, onNext, onBack }: ColumnMappingProps) {
+  const [saveName, setSaveName] = useState("");
+  const [savedMappings, setSavedMappings] = useState<SavedMapping[]>([]);
+  const [typeOverrides, setTypeOverrides] = useState<Record<string, Record<string, string>>>({});
+  const [columnTypes, setColumnTypes] = useState<Record<string, Record<string, { type: "text" | "numeric" | "date"; sample: string }>>>({});
+
+  useEffect(() => {
+    // Detect column types
+    const types: Record<string, Record<string, { type: "text" | "numeric" | "date"; sample: string }>> = {};
+    const allFiles = [...feeFiles, exchangeFile, ...(glFile ? [glFile] : [])];
+    for (const file of allFiles) {
+      types[file.name] = {};
+      for (const col of file.columns) {
+        const values = file.data.map((row) => row[col]);
+        types[file.name][col] = detectColumnType(values);
+      }
+    }
+    setColumnTypes(types);
+    // Auto-detect mappings
+    const newFee: Record<string, ColumnMappingType> = {};
+    for (const file of feeFiles) {
+      if (!feeMappings[file.name] || Object.keys(feeMappings[file.name]).length === 0) {
+        const { mapping } = autoDetectMapping(FEE_FIELDS.map((f) => f.name), file.columns);
+        newFee[file.name] = mapping;
+      } else { newFee[file.name] = feeMappings[file.name]; }
+    }
+    onFeeMappingsChange(newFee);
+    if (Object.keys(exchangeMapping).length === 0) {
+      const { mapping } = autoDetectMapping(EXCHANGE_FIELDS.map((f) => f.name), exchangeFile.columns);
+      onExchangeMappingChange(mapping);
+    }
+    if (glFile && Object.keys(glMapping).length === 0) {
+      const { mapping } = autoDetectMapping(GL_FIELDS.map((f) => f.name), glFile.columns);
+      onGlMappingChange(mapping);
+    }
+    const saved = localStorage.getItem("savedMappings");
+    if (saved) setSavedMappings(JSON.parse(saved));
+  }, []);
+
+  const handleTypeOverride = (fileName: string, col: string, type: string) => {
+    setTypeOverrides((prev) => ({ ...prev, [fileName]: { ...(prev[fileName] || {}), [col]: type } }));
+  };
+
+  const handleSave = () => {
+    if (!saveName.trim()) return;
+    const newM: SavedMapping = { id: Date.now().toString(), name: saveName, mapping: feeMappings[feeFiles[0]?.name] || {}, savedAt: new Date().toLocaleString() };
+    const updated = [...savedMappings, newM];
+    setSavedMappings(updated);
+    localStorage.setItem("savedMappings", JSON.stringify(updated));
+    setSaveName("");
+  };
+
+  const allFeeRequiredMapped = feeFiles.every((file) => {
+    const m = feeMappings[file.name] || {};
+    return FEE_FIELDS.filter((f) => f.required).every((f) => m[f.name]);
+  });
+  const allExchangeRequiredMapped = EXCHANGE_FIELDS.filter((f) => f.required).every((f) => exchangeMapping[f.name]);
+  const allGlRequiredMapped = !glFile || GL_FIELDS.filter((f) => f.required).every((f) => glMapping[f.name]);
+  const canProceed = allFeeRequiredMapped && allExchangeRequiredMapped && allGlRequiredMapped;
+
+  return (
+    <div>
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-gray-800">Column Mapping</h2>
+        <p className="text-gray-500 mt-1">Map your file columns to system fields. Auto-detected types can be overridden.</p>
+        <div className="flex justify-center gap-4 mt-3">
+          <div className="flex items-center gap-1"><span className="w-2 h-2 bg-green-500 rounded-full"></span><span className="text-xs text-gray-500">All required mapped</span></div>
+          <div className="flex items-center gap-1"><span className="w-2 h-2 bg-amber-500 rounded-full"></span><span className="text-xs text-gray-500">Missing required</span></div>
+        </div>
+      </div>
+      <div className="mb-8">
+        <h3 className="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">Fee Files <span className={"text-xs px-2 py-0.5 rounded-full " + (allFeeRequiredMapped ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700")}>{allFeeRequiredMapped ? "Ready" : "Needs attention"}</span></h3>
+        <div className="space-y-6">
+          {feeFiles.map((file) => {
+            const { confidence } = autoDetectMapping(FEE_FIELDS.map((f) => f.name), file.columns);
+            return (<MappingCard key={file.name} file={file} fields={FEE_FIELDS} mapping={feeMappings[file.name] || {}} confidence={confidence} columnTypes={columnTypes[file.name] || {}} typeOverrides={typeOverrides[file.name] || {}} onTypeOverride={(col, type) => handleTypeOverride(file.name, col, type)} onChange={(field, value) => { onFeeMappingsChange({ ...feeMappings, [file.name]: { ...feeMappings[file.name], [field]: value } }); }} />);
+          })}
+        </div>
+      </div>
+      <div className="mb-8">
+        <h3 className="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">Exchange Rates <span className={"text-xs px-2 py-0.5 rounded-full " + (allExchangeRequiredMapped ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700")}>{allExchangeRequiredMapped ? "Ready" : "Needs attention"}</span></h3>
+        <MappingCard file={exchangeFile} fields={EXCHANGE_FIELDS} mapping={exchangeMapping} confidence={autoDetectMapping(EXCHANGE_FIELDS.map((f) => f.name), exchangeFile.columns).confidence} columnTypes={columnTypes[exchangeFile.name] || {}} typeOverrides={typeOverrides[exchangeFile.name] || {}} onTypeOverride={(col, type) => handleTypeOverride(exchangeFile.name, col, type)} onChange={(field, value) => { onExchangeMappingChange({ ...exchangeMapping, [field]: value }); }} />
+      </div>
+      {glFile && (
+        <div className="mb-8">
+          <h3 className="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">GL Data <span className={"text-xs px-2 py-0.5 rounded-full " + (allGlRequiredMapped ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700")}>{allGlRequiredMapped ? "Ready" : "Needs attention"}</span></h3>
+          <MappingCard file={glFile} fields={GL_FIELDS} mapping={glMapping} confidence={autoDetectMapping(GL_FIELDS.map((f) => f.name), glFile.columns).confidence} columnTypes={columnTypes[glFile.name] || {}} typeOverrides={typeOverrides[glFile.name] || {}} onTypeOverride={(col, type) => handleTypeOverride(glFile.name, col, type)} onChange={(field, value) => { onGlMappingChange({ ...glMapping, [field]: value }); }} />
+        </div>
+      )}
+      <div className="bg-gray-50 rounded-xl p-4 mb-8">
+        <h4 className="text-sm font-semibold text-gray-700 mb-2">Save Mapping Template</h4>
+        <div className="flex gap-2">
+          <input type="text" placeholder="Template name..." value={saveName} onChange={(e) => setSaveName(e.target.value)} className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm" />
+          <button onClick={handleSave} disabled={!saveName.trim()} className="px-4 py-2 bg-gray-700 text-white rounded-md text-sm font-medium hover:bg-gray-800 disabled:bg-gray-300">Save</button>
+        </div>
+      </div>
+      {!canProceed && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center mb-6">
+          <p className="text-red-700 text-sm font-medium">Please map all required fields (*) before continuing</p>
+          <p className="text-red-600 text-xs mt-1">Each file must have all required fields mapped to proceed</p>
+        </div>
+      )}
+      <div className="flex justify-between">
+        <button onClick={onBack} className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50">Back</button>
+        <button onClick={onNext} disabled={!canProceed} className="px-8 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-colors">Continue to Review</button>
+      </div>
+    </div>
+  );
+}
+
+===== FileUpload.tsx =====
+"use client";
+
+import React, { useCallback, useState } from "react";
+import * as XLSX from "xlsx";
+import type { FileData, LoadingState } from "../types";
+
+function parseFile(file: File): Promise<FileData> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: "array", cellDates: true });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json(sheet, { defval: null });
+        if (json.length === 0) { reject(new Error("File is empty or has no data rows. Please check the file and try again.")); return; }
+        const columns = Object.keys(json[0] as Record<string, unknown>);
+        if (columns.length === 0) { reject(new Error("No columns detected. Please make sure the first row contains headers.")); return; }
+        resolve({ name: file.name, data: json as Record<string, unknown>[], columns, rowCount: json.length });
+      } catch (err) { reject(new Error("Failed to parse file. Please make sure it is a valid Excel (.xlsx/.xls) or CSV file. Error: " + String(err))); }
+    };
+    reader.onerror = () => reject(new Error("Failed to read file. Please try again."));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function DropZone({ label, description, hint, icon, accept, multiple, files, onDrop, onRemove, loading }: {
+  label: string; description: string; hint: string; icon: string; accept: string; multiple?: boolean;
+  files: FileData[]; onDrop: (files: File[]) => void; onRemove: (name: string) => void; loading: LoadingState;
+}) {
+  const [dragOver, setDragOver] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault(); setDragOver(false); setError(null);
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    if (droppedFiles.length === 0) { setError("No files detected. Please try again."); return; }
+    for (const f of droppedFiles) {
+      const ext = f.name.split(".").pop()?.toLowerCase();
+      if (!["xlsx", "xls", "csv"].includes(ext || "")) { setError("Invalid file type: " + f.name + ". Please upload .xlsx, .xls, or .csv files only."); return; }
+      if (f.size > 100 * 1024 * 1024) { setError("File too large: " + f.name + " (" + Math.round(f.size / 1024 / 1024) + "MB). Maximum size is 100MB."); return; }
+    }
+    onDrop(droppedFiles);
+  }, [onDrop]);
+  const handleInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
+    if (e.target.files) { onDrop(Array.from(e.target.files)); }
+  }, [onDrop]);
+  return (
+    <div className="mb-6">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-2xl">{icon}</span>
+        <div>
+          <h3 className="font-semibold text-gray-800">{label}</h3>
+          <p className="text-xs text-gray-500">{description}</p>
+        </div>
+      </div>
+      <div className={"relative border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer " + (dragOver ? "border-blue-500 bg-blue-50 scale-[1.01]" : files.length > 0 ? "border-green-300 bg-green-50" : "border-gray-300 bg-gray-50 hover:border-blue-400 hover:bg-blue-50")}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}
+        onClick={() => document.getElementById("input-" + label)?.click()}>
+        <input id={"input-" + label} type="file" accept={accept} multiple={multiple} className="hidden" onChange={handleInput} />
+        {loading.isLoading ? (
+          <div className="py-4">
+            <div className="w-12 h-12 mx-auto mb-3 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+            <p className="text-blue-700 font-medium">{loading.stage}</p>
+            <p className="text-xs text-blue-500 mt-1">{loading.detail}</p>
+            <div className="w-64 mx-auto mt-3 bg-blue-100 rounded-full h-2">
+              <div className="bg-blue-600 h-2 rounded-full transition-all duration-300" style={{ width: loading.progress + "%" }}></div>
+            </div>
+            <p className="text-xs text-blue-400 mt-1">{loading.progress}%</p>
+          </div>
+        ) : files.length > 0 ? (
+          <div className="py-2">
+            <div className="text-green-600 text-3xl mb-2">&#10003;</div>
+            <p className="text-green-700 font-medium">{files.length} file{files.length > 1 ? "s" : ""} loaded successfully</p>
+          </div>
+        ) : (
+          <div className="py-4">
+            <div className="text-gray-400 text-3xl mb-2">&#8682;</div>
+            <p className="text-gray-600 font-medium">Drag & drop file{multiple ? "s" : ""} here</p>
+            <p className="text-xs text-gray-400 mt-1">or click to browse</p>
+          </div>
+        )}
+      </div>
+      <p className="text-xs text-gray-400 mt-1 italic">{hint}</p>
+      {error && (
+        <div className="mt-2 bg-red-50 border border-red-200 rounded-lg p-3">
+          <p className="text-sm text-red-700 font-medium">Error</p>
+          <p className="text-xs text-red-600">{error}</p>
+        </div>
+      )}
+      {files.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {files.map((f) => (
+            <div key={f.name} className="flex items-center justify-between bg-white rounded-lg border border-gray-200 px-4 py-2">
+              <div className="flex items-center gap-3">
+                <span className="text-green-500 text-lg">&#9679;</span>
+                <div>
+                  <p className="text-sm font-medium text-gray-800">{f.name}</p>
+                  <p className="text-xs text-gray-500">{f.rowCount.toLocaleString()} rows | {f.columns.length} columns</p>
+                  <p className="text-xs text-gray-400">Columns: {f.columns.slice(0, 5).join(", ")}{f.columns.length > 5 ? " +" + (f.columns.length - 5) + " more" : ""}</p>
+                </div>
+              </div>
+              <button onClick={(e) => { e.stopPropagation(); onRemove(f.name); }} className="text-red-400 hover:text-red-600 text-sm font-medium px-2 py-1 hover:bg-red-50 rounded">Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface FileUploadProps {
+  feeFiles: FileData[];
+  exchangeFile: FileData | null;
+  glFile: FileData | null;
+  onFeeFilesChange: (files: FileData[]) => void;
+  onExchangeFileChange: (file: FileData | null) => void;
+  onGlFileChange: (file: FileData | null) => void;
+  onNext: () => void;
+}
+
+export default function FileUpload({ feeFiles, exchangeFile, glFile, onFeeFilesChange, onExchangeFileChange, onGlFileChange, onNext }: FileUploadProps) {
+  const [feeLoading, setFeeLoading] = useState<LoadingState>({ isLoading: false, stage: "", progress: 0, detail: "" });
+  const [exLoading, setExLoading] = useState<LoadingState>({ isLoading: false, stage: "", progress: 0, detail: "" });
+  const [glLoading, setGlLoading] = useState<LoadingState>({ isLoading: false, stage: "", progress: 0, detail: "" });
+
+  const handleFeeFiles = async (files: File[]) => {
+    setFeeLoading({ isLoading: true, stage: "Reading files...", progress: 10, detail: "Parsing Excel data" });
+    try {
+      const results: FileData[] = [...feeFiles];
+      for (let i = 0; i < files.length; i++) {
+        setFeeLoading({ isLoading: true, stage: "Processing " + files[i].name + "...", progress: 10 + Math.round((i / files.length) * 80), detail: "File " + (i + 1) + " of " + files.length });
+        const parsed = await parseFile(files[i]);
+        const existing = results.findIndex((f) => f.name === parsed.name);
+        if (existing >= 0) { results[existing] = parsed; } else { results.push(parsed); }
+      }
+      setFeeLoading({ isLoading: true, stage: "Validating...", progress: 95, detail: "Checking data integrity" });
+      await new Promise((r) => setTimeout(r, 300));
+      onFeeFilesChange(results);
+      setFeeLoading({ isLoading: false, stage: "", progress: 100, detail: "" });
+    } catch (err) {
+      setFeeLoading({ isLoading: false, stage: "", progress: 0, detail: "" });
+      alert("Error loading fee file: " + String(err instanceof Error ? err.message : err));
+    }
+  };
+
+  const handleExchangeFile = async (files: File[]) => {
+    setExLoading({ isLoading: true, stage: "Reading exchange rate file...", progress: 30, detail: "Parsing data" });
+    try {
+      const parsed = await parseFile(files[0]);
+      setExLoading({ isLoading: true, stage: "Validating rates...", progress: 80, detail: parsed.rowCount + " rates found" });
+      await new Promise((r) => setTimeout(r, 300));
+      onExchangeFileChange(parsed);
+      setExLoading({ isLoading: false, stage: "", progress: 100, detail: "" });
+    } catch (err) {
+      setExLoading({ isLoading: false, stage: "", progress: 0, detail: "" });
+      alert("Error loading exchange rate file: " + String(err instanceof Error ? err.message : err));
+    }
+  };
+
+  const handleGlFile = async (files: File[]) => {
+    setGlLoading({ isLoading: true, stage: "Reading GL file...", progress: 30, detail: "Parsing data" });
+    try {
+      const parsed = await parseFile(files[0]);
+      setGlLoading({ isLoading: true, stage: "Validating GL data...", progress: 80, detail: parsed.rowCount + " entries found" });
+      await new Promise((r) => setTimeout(r, 300));
+      onGlFileChange(parsed);
+      setGlLoading({ isLoading: false, stage: "", progress: 100, detail: "" });
+    } catch (err) {
+      setGlLoading({ isLoading: false, stage: "", progress: 0, detail: "" });
+      alert("Error loading GL file: " + String(err instanceof Error ? err.message : err));
+    }
+  };
+
+  const canProceed = feeFiles.length > 0 && exchangeFile !== null;
+
+  return (
+    <div>
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-gray-800">Upload Your Files</h2>
+        <p className="text-gray-500 mt-1">Upload your fee transaction files, exchange rates, and optionally GL data for comparison</p>
+      </div>
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-8">
+        <h3 className="font-semibold text-blue-800 mb-2">How this works:</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+          <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">1</span><p className="text-blue-700">Upload your <strong>fee transaction files</strong> containing fee codes, amounts, currencies, and dates</p></div>
+          <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">2</span><p className="text-blue-700">Upload <strong>exchange rates</strong> file with daily rates per currency (e.g. from Business Central)</p></div>
+          <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">3</span><p className="text-blue-700">Map columns to system fields - we auto-detect when possible</p></div>
+          <div className="flex items-start gap-2"><span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shrink-0">4</span><p className="text-blue-700">Get results: amounts converted to USD, grouped by fee code, compared to GL</p></div>
+        </div>
+      </div>
+      <DropZone label="Fee Transaction Files" description="Upload one or more files containing fee transactions. Required fields: Fee Code, Amount, Currency, Date." hint="Supports .xlsx, .xls, .csv | Multiple files allowed | Max 100MB per file" icon="&#128206;" accept=".xlsx,.xls,.csv" multiple={true} files={feeFiles} onDrop={handleFeeFiles} onRemove={(name) => onFeeFilesChange(feeFiles.filter((f) => f.name !== name))} loading={feeLoading} />
+      <DropZone label="Exchange Rate File" description="Daily exchange rates per currency to USD. Expected columns: Date, Currency Code, Exchange Rate." hint="Should contain daily rates for all currencies in your fee files | Supports .xlsx, .xls, .csv" icon="&#128177;" accept=".xlsx,.xls,.csv" files={exchangeFile ? [exchangeFile] : []} onDrop={handleExchangeFile} onRemove={() => onExchangeFileChange(null)} loading={exLoading} />
+      <DropZone label="GL Data (Optional)" description="General Ledger data for comparison. The tool will compare calculated USD amounts with GL amounts per fee code." hint="Optional - upload only if you want to compare results against the General Ledger" icon="&#128209;" accept=".xlsx,.xls,.csv" files={glFile ? [glFile] : []} onDrop={handleGlFile} onRemove={() => onGlFileChange(null)} loading={glLoading} />
+      {!canProceed && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center mb-6">
+          <p className="text-amber-800 text-sm font-medium">
+            {feeFiles.length === 0 && !exchangeFile ? "Please upload at least one fee file and an exchange rate file to continue" :
+             feeFiles.length === 0 ? "Please upload at least one fee transaction file" :
+             "Please upload an exchange rate file"}
+          </p>
+        </div>
+      )}
+      <div className="flex justify-end mt-6">
+        <button onClick={onNext} disabled={!canProceed} className="px-8 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-all text-lg">Continue to Column Mapping &rarr;</button>
+      </div>
+    </div>
+  );
+}
+
+===== Results.tsx =====
+"use client";
+
+import React, { useState } from "react";
+import type { ProcessingResults } from "../types";
+import type { EnhancedProcessingResults } from "../lib/processing";
+import * as XLSX from "xlsx";
+
+interface ResultsProps {
+  results: ProcessingResults;
+  onBack: () => void;
+  onReset: () => void;
+}
+
+function StatusBadge({ status }: { status?: string }) {
+  if (status === "match") return <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-medium">Match</span>;
+  if (status === "minor") return <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium">Minor Diff</span>;
+  if (status === "mismatch") return <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-xs font-medium">Mismatch</span>;
+  return <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-xs font-medium">N/A</span>;
+}
+
+export default function Results({ results: rawResults, onBack, onReset }: ResultsProps) {
+  const results = rawResults as EnhancedProcessingResults;
+  const [view, setView] = useState<"summary" | "detailed" | "currency" | "errors">("summary");
+
+  const exportToExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const summaryWS = XLSX.utils.json_to_sheet(results.summary.map((r) => ({
+      "Fee Code": r.feeCode, "Records": r.records, "Sum Fee Amount (USD)": r.sumFeeAmountUSD,
+      "GL Amount (USD)": r.glAmountUSD ?? "", "Difference": r.difference ?? "",
+      "Difference %": r.differencePercent !== undefined ? r.differencePercent + "%" : "", "Status": r.status ?? ""
+    })));
+    XLSX.utils.book_append_sheet(wb, summaryWS, "Summary by Fee Code");
+    const detailedWS = XLSX.utils.json_to_sheet(results.detailed.map((r) => ({
+      "Fee Code": r.feeCode, "Currency": r.currency, "Records": r.records,
+      "Sum Local Amount": r.sumFeeAmount, "Sum USD Amount": r.sumFeeAmountUSD
+    })));
+    XLSX.utils.book_append_sheet(wb, detailedWS, "Detailed by Currency");
+    if (results.currencyTotals) {
+      const currWS = XLSX.utils.json_to_sheet(results.currencyTotals.map((c) => ({
+        "Currency": c.currency, "Records": c.records, "Total Local": c.totalLocal,
+        "Total USD": c.totalUSD, "Avg Rate": c.avgRate
+      })));
+      XLSX.utils.book_append_sheet(wb, currWS, "Currency Totals");
+    }
+    if (results.errors && results.errors.length > 0) {
+      const errWS = XLSX.utils.json_to_sheet(results.errors.map((e) => ({
+        "Row": e.row, "File": e.file, "Fee Code": e.feeCode, "Currency": e.currency,
+        "Date": e.date, "Error": e.message
+      })));
+      XLSX.utils.book_append_sheet(wb, errWS, "Errors");
+    }
+    XLSX.writeFile(wb, "NonGBT_Results_" + new Date().toISOString().slice(0, 10) + ".xlsx");
+  };
+
+  const matches = results.summary.filter((r) => r.status === "match").length;
+  const mismatches = results.summary.filter((r) => r.status === "mismatch").length;
+  const minors = results.summary.filter((r) => r.status === "minor").length;
+  const hasGL = results.summary.some((r) => r.glAmountUSD !== undefined);
+  const errorCount = results.errors?.length || 0;
+
+  return (
+    <div>
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-gray-800">Processing Results</h2>
+        <p className="text-gray-500 mt-1">Complete analysis of fee transactions with exchange rate conversion</p>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-blue-50 rounded-xl p-4 text-center border border-blue-100"><p className="text-2xl font-bold text-blue-700">{results.totalRecords.toLocaleString()}</p><p className="text-xs text-blue-600 mt-1">Total Records Processed</p></div>
+        <div className="bg-green-50 rounded-xl p-4 text-center border border-green-100"><p className="text-2xl font-bold text-green-700">${results.grandTotalUSD?.toLocaleString() || results.totalAmountUSD.toLocaleString()}</p><p className="text-xs text-green-600 mt-1">Grand Total (USD)</p></div>
+        <div className="bg-purple-50 rounded-xl p-4 text-center border border-purple-100"><p className="text-2xl font-bold text-purple-700">{results.feeCodesCount}</p><p className="text-xs text-purple-600 mt-1">Unique Fee Codes</p></div>
+        <div className="bg-amber-50 rounded-xl p-4 text-center border border-amber-100"><p className="text-2xl font-bold text-amber-700">{results.currenciesCount}</p><p className="text-xs text-amber-600 mt-1">Currencies</p></div>
+      </div>
+      {hasGL && (
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center"><p className="text-3xl font-bold text-green-700">{matches}</p><p className="text-sm text-green-600">Matches</p></div>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center"><p className="text-3xl font-bold text-amber-700">{minors}</p><p className="text-sm text-amber-600">Minor Differences</p></div>
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-center"><p className="text-3xl font-bold text-red-700">{mismatches}</p><p className="text-sm text-red-600">Mismatches</p></div>
+        </div>
+      )}
+      {errorCount > 0 && (
+        <div className="bg-red-50 border border-red-300 rounded-xl p-4 mb-6">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-red-600 font-bold text-lg">!</span>
+            <h3 className="font-semibold text-red-800">Attention: {errorCount} issue{errorCount > 1 ? "s" : ""} found</h3>
+          </div>
+          <p className="text-sm text-red-700">Some transactions could not be processed. Common causes:</p>
+          <ul className="text-sm text-red-600 mt-1 ml-4 list-disc">
+            <li>Missing exchange rate for specific currency/date combination</li>
+            <li>Invalid or missing fee amounts</li>
+            <li>Missing fee codes or currency codes</li>
+          </ul>
+          <button onClick={() => setView("errors")} className="mt-2 text-sm text-red-700 font-semibold underline hover:text-red-900">View all errors</button>
+        </div>
+      )}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setView("summary")} className={"px-4 py-2 rounded-lg text-sm font-medium transition-colors " + (view === "summary" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200")}>Summary by Fee Code</button>
+          <button onClick={() => setView("detailed")} className={"px-4 py-2 rounded-lg text-sm font-medium transition-colors " + (view === "detailed" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200")}>Detailed by Currency</button>
+          <button onClick={() => setView("currency")} className={"px-4 py-2 rounded-lg text-sm font-medium transition-colors " + (view === "currency" ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200")}>Currency Totals</button>
+          {errorCount > 0 && (<button onClick={() => setView("errors")} className={"px-4 py-2 rounded-lg text-sm font-medium transition-colors " + (view === "errors" ? "bg-red-600 text-white" : "bg-red-100 text-red-600 hover:bg-red-200")}>Errors ({errorCount})</button>)}
+        </div>
+        <button onClick={exportToExcel} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 shadow-sm">Export to Excel</button>
+      </div>
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-6">
+        <div className="overflow-x-auto">
+          {view === "summary" && (
+            <table className="w-full text-sm">
+              <thead><tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-4 py-3 text-left font-semibold text-gray-700">Fee Code</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Records</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Total (USD)</th>
+                {hasGL && <th className="px-4 py-3 text-right font-semibold text-gray-700">GL (USD)</th>}
+                {hasGL && <th className="px-4 py-3 text-right font-semibold text-gray-700">Difference</th>}
+                {hasGL && <th className="px-4 py-3 text-right font-semibold text-gray-700">Diff %</th>}
+                {hasGL && <th className="px-4 py-3 text-center font-semibold text-gray-700">Status</th>}
+              </tr></thead>
+              <tbody>
+                {results.summary.map((row) => (
+                  <tr key={row.feeCode} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-800">{row.feeCode}</td>
+                    <td className="px-4 py-3 text-right text-gray-600">{row.records.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right font-medium">${row.sumFeeAmountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    {hasGL && <td className="px-4 py-3 text-right">{row.glAmountUSD !== undefined ? "$" + row.glAmountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "-"}</td>}
+                    {hasGL && <td className={"px-4 py-3 text-right font-medium " + (row.difference && row.difference > 0 ? "text-red-600" : row.difference && row.difference < 0 ? "text-blue-600" : "text-green-600")}>{row.difference !== undefined ? "$" + row.difference.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "-"}</td>}
+                    {hasGL && <td className="px-4 py-3 text-right text-gray-600">{row.differencePercent !== undefined ? row.differencePercent.toFixed(2) + "%" : "-"}</td>}
+                    {hasGL && <td className="px-4 py-3 text-center"><StatusBadge status={row.status} /></td>}
+                  </tr>
+                ))}
+                <tr className="bg-gray-100 font-bold border-t-2 border-gray-300">
+                  <td className="px-4 py-3 text-gray-800">TOTAL</td>
+                  <td className="px-4 py-3 text-right text-gray-800">{results.summary.reduce((s, r) => s + r.records, 0).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right text-gray-800">${results.summary.reduce((s, r) => s + r.sumFeeAmountUSD, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  {hasGL && <td className="px-4 py-3 text-right text-gray-800">${results.summary.reduce((s, r) => s + (r.glAmountUSD || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>}
+                  {hasGL && <td className="px-4 py-3 text-right text-gray-800">${results.summary.reduce((s, r) => s + (r.difference || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>}
+                  {hasGL && <td className="px-4 py-3"></td>}
+                  {hasGL && <td className="px-4 py-3"></td>}
+                </tr>
+              </tbody>
+            </table>
+          )}
+          {view === "detailed" && (
+            <table className="w-full text-sm">
+              <thead><tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-4 py-3 text-left font-semibold text-gray-700">Fee Code</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-700">Currency</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Records</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Sum (Local)</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Sum (USD)</th>
+              </tr></thead>
+              <tbody>
+                {results.detailed.map((row, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-800">{row.feeCode}</td>
+                    <td className="px-4 py-3 text-gray-600">{row.currency}</td>
+                    <td className="px-4 py-3 text-right text-gray-600">{row.records.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right">{row.sumFeeAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-right font-medium">${row.sumFeeAmountUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  </tr>
+                ))}
+                <tr className="bg-gray-100 font-bold border-t-2 border-gray-300">
+                  <td className="px-4 py-3 text-gray-800" colSpan={2}>TOTAL</td>
+                  <td className="px-4 py-3 text-right text-gray-800">{results.detailed.reduce((s, r) => s + r.records, 0).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right text-gray-800">-</td>
+                  <td className="px-4 py-3 text-right text-gray-800">${results.detailed.reduce((s, r) => s + r.sumFeeAmountUSD, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+          {view === "currency" && results.currencyTotals && (
+            <table className="w-full text-sm">
+              <thead><tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-4 py-3 text-left font-semibold text-gray-700">Currency</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Records</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Total (Local)</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Avg Rate</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">Total (USD)</th>
+                <th className="px-4 py-3 text-right font-semibold text-gray-700">% of Total</th>
+              </tr></thead>
+              <tbody>
+                {results.currencyTotals.map((row) => (
+                  <tr key={row.currency} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-800">{row.currency}</td>
+                    <td className="px-4 py-3 text-right text-gray-600">{row.records.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right">{row.totalLocal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-right text-gray-600">{row.avgRate.toFixed(6)}</td>
+                    <td className="px-4 py-3 text-right font-medium">${row.totalUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-right text-gray-600">{results.grandTotalUSD ? ((row.totalUSD / results.grandTotalUSD) * 100).toFixed(1) + "%" : "-"}</td>
+                  </tr>
+                ))}
+                <tr className="bg-gray-100 font-bold border-t-2 border-gray-300">
+                  <td className="px-4 py-3 text-gray-800">TOTAL</td>
+                  <td className="px-4 py-3 text-right text-gray-800">{results.currencyTotals.reduce((s, r) => s + r.records, 0).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right text-gray-800">-</td>
+                  <td className="px-4 py-3 text-right text-gray-800">-</td>
+                  <td className="px-4 py-3 text-right text-gray-800">${(results.grandTotalUSD || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td className="px-4 py-3 text-right text-gray-800">100%</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+          {view === "errors" && results.errors && (
+            <table className="w-full text-sm">
+              <thead><tr className="bg-red-50 border-b border-red-200">
+                <th className="px-4 py-3 text-left font-semibold text-red-700">Row</th>
+                <th className="px-4 py-3 text-left font-semibold text-red-700">File</th>
+                <th className="px-4 py-3 text-left font-semibold text-red-700">Fee Code</th>
+                <th className="px-4 py-3 text-left font-semibold text-red-700">Currency</th>
+                <th className="px-4 py-3 text-left font-semibold text-red-700">Date</th>
+                <th className="px-4 py-3 text-left font-semibold text-red-700">Error</th>
+              </tr></thead>
+              <tbody>
+                {results.errors.map((err, i) => (
+                  <tr key={i} className="border-b border-red-100 hover:bg-red-50">
+                    <td className="px-4 py-3 text-gray-700">{err.row}</td>
+                    <td className="px-4 py-3 text-gray-700 text-xs">{err.file}</td>
+                    <td className="px-4 py-3 font-medium text-gray-800">{err.feeCode}</td>
+                    <td className="px-4 py-3 text-gray-600">{err.currency}</td>
+                    <td className="px-4 py-3 text-gray-600">{err.date || "-"}</td>
+                    <td className="px-4 py-3 text-red-700 text-xs">{err.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      {results.exchangeRateUsed && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+          <p className="text-sm text-blue-800 font-medium">Exchange Rate Method: Daily rates by transaction date</p>
+          <p className="text-xs text-blue-600 mt-1">Each transaction was converted using the exchange rate matching its transaction date. If an exact date match was not found, the nearest available rate (up to 7 days) was used.</p>
+        </div>
+      )}
+      <div className="flex justify-between">
+        <button onClick={onBack} className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50">Back to Review</button>
+        <button onClick={onReset} className="px-6 py-3 bg-gray-700 text-white rounded-lg font-medium hover:bg-gray-800">Start New Check</button>
+      </div>
+    </div>
+  );
+}
+
+===== Review.tsx =====
+"use client";
+
+import React, { useState, useEffect } from "react";
+import type { FileData, ColumnMapping, LoadingState, FileValidation, ValidationIssue } from "../types";
+
+function validateFile(file: FileData, mapping: ColumnMapping, fileType: "fee" | "exchange" | "gl"): FileValidation {
+  const issues: ValidationIssue[] = [];
+  const stats = {
+    totalRows: file.rowCount,
+    emptyRows: 0,
+    uniqueValues: {} as Record<string, number>,
+    nullCounts: {} as Record<string, number>,
+    sampleValues: {} as Record<string, string[]>,
+  };
+  // Check null counts and samples for each mapped column
+  for (const [field, col] of Object.entries(mapping)) {
+    if (!col) continue;
+    let nullCount = 0;
+    const uniqueSet = new Set<string>();
+    const samples: string[] = [];
+    for (const row of file.data) {
+      const val = row[col];
+      if (val === null || val === undefined || String(val).trim() === "") {
+        nullCount++;
+      } else {
+        const str = String(val).trim();
+        uniqueSet.add(str);
+        if (samples.length < 5) samples.push(str);
+      }
+    }
+    stats.nullCounts[field] = nullCount;
+    stats.uniqueValues[field] = uniqueSet.size;
+    stats.sampleValues[field] = samples;
+    if (nullCount > 0) {
+      const pct = Math.round((nullCount / file.rowCount) * 100);
+      if (pct > 50) {
+        issues.push({ severity: "error", field, message: field + " has " + nullCount + " empty values (" + pct + "% of rows). This column may be incorrectly mapped.", suggestion: "Check if the correct column is mapped to " + field });
+      } else if (pct > 10) {
+        issues.push({ severity: "warning", field, message: field + " has " + nullCount + " empty values (" + pct + "%). These rows will be skipped during processing.", suggestion: "Verify your source data for missing " + field + " values" });
+      } else if (nullCount > 0) {
+        issues.push({ severity: "info", field, message: field + " has " + nullCount + " empty value" + (nullCount > 1 ? "s" : "") + ". These rows will be skipped." });
+      }
+    }
+  }
+  // Fee-specific validations
+  if (fileType === "fee") {
+    const amountCol = mapping["Fee Amount"];
+    if (amountCol) {
+      let invalidAmounts = 0;
+      for (const row of file.data) {
+        const val = String(row[amountCol] || "").replace(/,/g, "");
+        if (val && isNaN(parseFloat(val))) invalidAmounts++;
+      }
+      if (invalidAmounts > 0) {
+        issues.push({ severity: "error", field: "Fee Amount", message: invalidAmounts + " rows have non-numeric fee amounts. These cannot be processed.", suggestion: "Check for text values, special characters, or formatting issues in the amount column" });
+      }
+    }
+    const currCol = mapping["Currency"];
+    if (currCol) {
+      const currencies = new Set<string>();
+      for (const row of file.data) {
+        const val = String(row[currCol] || "").trim().toUpperCase();
+        if (val) currencies.add(val);
+      }
+      issues.push({ severity: "info", field: "Currency", message: "Found " + currencies.size + " unique currencies: " + Array.from(currencies).sort().join(", ") });
+    }
+  }
+  // Exchange rate specific validations
+  if (fileType === "exchange") {
+    const rateCol = mapping["Exchange Rate"];
+    if (rateCol) {
+      let zeroRates = 0, negativeRates = 0;
+      for (const row of file.data) {
+        const val = parseFloat(String(row[rateCol] || "0"));
+        if (val === 0) zeroRates++;
+        if (val < 0) negativeRates++;
+      }
+      if (zeroRates > 0) issues.push({ severity: "warning", field: "Exchange Rate", message: zeroRates + " rows have zero exchange rate. These currencies will result in zero USD amounts." });
+      if (negativeRates > 0) issues.push({ severity: "error", field: "Exchange Rate", message: negativeRates + " rows have negative exchange rates. This is likely an error." });
+    }
+    const dateCol = mapping["Rate Date"];
+    if (dateCol) {
+      const dates = new Set<string>();
+      for (const row of file.data) {
+        const val = String(row[dateCol] || "").trim();
+        if (val) dates.add(val.slice(0, 10));
+      }
+      const currencies = new Set<string>();
+      const currCol = mapping["Currency Code"];
+      if (currCol) {
+        for (const row of file.data) {
+          const val = String(row[currCol] || "").trim().toUpperCase();
+          if (val) currencies.add(val);
+        }
+      }
+      issues.push({ severity: "info", field: "Rate Date", message: "Exchange rate file covers " + dates.size + " unique dates and " + currencies.size + " currencies (" + file.rowCount + " rate entries total)" });
+    }
+  }
+  const hasErrors = issues.some((i) => i.severity === "error");
+  return { fileName: file.name, issues, isValid: !hasErrors, stats };
+}
+
+function IssueIcon({ severity }: { severity: string }) {
+  if (severity === "error") return <span className="text-red-500 font-bold">&#10060;</span>;
+  if (severity === "warning") return <span className="text-amber-500 font-bold">&#9888;</span>;
+  return <span className="text-blue-500">&#8505;</span>;
+}
+
+interface ReviewProps {
+  feeFiles: FileData[];
+  exchangeFile: FileData;
+  glFile: FileData | null;
+  feeMappings: Record<string, ColumnMapping>;
+  exchangeMapping: ColumnMapping;
+  glMapping: ColumnMapping;
+  onProcess: () => void;
+  onBack: () => void;
+}
+
+export default function Review({ feeFiles, exchangeFile, glFile, feeMappings, exchangeMapping, glMapping, onProcess, onBack }: ReviewProps) {
+  const [validations, setValidations] = useState<FileValidation[]>([]);
+  const [loading, setLoading] = useState<LoadingState>({ isLoading: true, stage: "Validating data...", progress: 0, detail: "" });
+  const [processing, setProcessing] = useState(false);
+
+  useEffect(() => {
+    const run = async () => {
+      const results: FileValidation[] = [];
+      const allFiles = [...feeFiles.map((f, i) => ({ file: f, mapping: feeMappings[f.name] || {}, type: "fee" as const, idx: i })), { file: exchangeFile, mapping: exchangeMapping, type: "exchange" as const, idx: 0 }, ...(glFile ? [{ file: glFile, mapping: glMapping, type: "gl" as const, idx: 0 }] : [])];
+      for (let i = 0; i < allFiles.length; i++) {
+        const { file, mapping, type } = allFiles[i];
+        setLoading({ isLoading: true, stage: "Validating " + file.name + "...", progress: Math.round(((i + 1) / allFiles.length) * 100), detail: "File " + (i + 1) + " of " + allFiles.length });
+        await new Promise((r) => setTimeout(r, 200));
+        results.push(validateFile(file, mapping, type));
+      }
+      setValidations(results);
+      setLoading({ isLoading: false, stage: "", progress: 100, detail: "" });
+    };
+    run();
+  }, [feeFiles, exchangeFile, glFile, feeMappings, exchangeMapping, glMapping]);
+
+  const handleProcess = async () => {
+    setProcessing(true);
+    await new Promise((r) => setTimeout(r, 100));
+    onProcess();
+  };
+
+  const totalErrors = validations.reduce((s, v) => s + v.issues.filter((i) => i.severity === "error").length, 0);
+  const totalWarnings = validations.reduce((s, v) => s + v.issues.filter((i) => i.severity === "warning").length, 0);
+  const allValid = validations.every((v) => v.isValid);
+  const totalRows = feeFiles.reduce((s, f) => s + f.rowCount, 0);
+
+  if (loading.isLoading) {
+    return (
+      <div className="text-center py-20">
+        <div className="w-16 h-16 mx-auto mb-6 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+        <h2 className="text-xl font-bold text-gray-800 mb-2">{loading.stage}</h2>
+        <p className="text-gray-500">{loading.detail}</p>
+        <div className="w-64 mx-auto mt-4 bg-gray-200 rounded-full h-2">
+          <div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: loading.progress + "%" }}></div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-bold text-gray-800">Review & Validate</h2>
+        <p className="text-gray-500 mt-1">Review your data before processing. Fix any errors before continuing.</p>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-blue-50 rounded-xl p-4 text-center border border-blue-100"><p className="text-2xl font-bold text-blue-700">{totalRows.toLocaleString()}</p><p className="text-xs text-blue-600 mt-1">Total Fee Rows</p></div>
+        <div className="bg-purple-50 rounded-xl p-4 text-center border border-purple-100"><p className="text-2xl font-bold text-purple-700">{exchangeFile.rowCount.toLocaleString()}</p><p className="text-xs text-purple-600 mt-1">Exchange Rate Entries</p></div>
+        <div className={"rounded-xl p-4 text-center border " + (totalErrors > 0 ? "bg-red-50 border-red-100" : "bg-green-50 border-green-100")}><p className={"text-2xl font-bold " + (totalErrors > 0 ? "text-red-700" : "text-green-700")}>{totalErrors}</p><p className={"text-xs mt-1 " + (totalErrors > 0 ? "text-red-600" : "text-green-600")}>Errors</p></div>
+        <div className={"rounded-xl p-4 text-center border " + (totalWarnings > 0 ? "bg-amber-50 border-amber-100" : "bg-green-50 border-green-100")}><p className={"text-2xl font-bold " + (totalWarnings > 0 ? "text-amber-700" : "text-green-700")}>{totalWarnings}</p><p className={"text-xs mt-1 " + (totalWarnings > 0 ? "text-amber-600" : "text-green-600")}>Warnings</p></div>
+      </div>
+      {totalErrors > 0 && (
+        <div className="bg-red-50 border border-red-300 rounded-xl p-4 mb-6">
+          <h3 className="font-semibold text-red-800 mb-1">Errors Found</h3>
+          <p className="text-sm text-red-700">There are {totalErrors} error(s) in your data. You can still proceed, but affected rows will be skipped. Consider fixing these issues for complete results.</p>
+        </div>
+      )}
+      <div className="space-y-4 mb-8">
+        {validations.map((val) => (
+          <div key={val.fileName} className={"bg-white rounded-xl border p-5 " + (val.isValid ? "border-green-200" : "border-red-200")}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className={"w-2.5 h-2.5 rounded-full " + (val.isValid ? "bg-green-500" : "bg-red-500")}></span>
+                <h3 className="font-semibold text-gray-800">{val.fileName}</h3>
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{val.stats.totalRows.toLocaleString()} rows</span>
+              </div>
+              <span className={"text-xs px-2 py-1 rounded-full font-medium " + (val.isValid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700")}>{val.isValid ? "Valid" : "Has errors"}</span>
+            </div>
+            {val.issues.length > 0 && (
+              <div className="space-y-2">
+                {val.issues.map((issue, i) => (
+                  <div key={i} className={"rounded-lg p-3 " + (issue.severity === "error" ? "bg-red-50 border border-red-200" : issue.severity === "warning" ? "bg-amber-50 border border-amber-200" : "bg-blue-50 border border-blue-200")}>
+                    <div className="flex items-start gap-2">
+                      <IssueIcon severity={issue.severity} />
+                      <div>
+                        <p className={"text-sm font-medium " + (issue.severity === "error" ? "text-red-800" : issue.severity === "warning" ? "text-amber-800" : "text-blue-800")}>{issue.field}: {issue.message}</p>
+                        {issue.suggestion && <p className={"text-xs mt-0.5 " + (issue.severity === "error" ? "text-red-600" : issue.severity === "warning" ? "text-amber-600" : "text-blue-600")}>Suggestion: {issue.suggestion}</p>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {val.issues.length === 0 && <p className="text-sm text-green-600">All validations passed.</p>}
+          </div>
+        ))}
+      </div>
+      {totalRows > 20000 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6 text-center">
+          <p className="text-amber-800 text-sm font-medium">Large dataset detected ({totalRows.toLocaleString()} rows)</p>
+          <p className="text-amber-600 text-xs mt-1">Processing may take a few seconds. Please wait for it to complete.</p>
+        </div>
+      )}
+      <div className="flex justify-between">
+        <button onClick={onBack} className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50">Back to Mapping</button>
+        {processing ? (
+          <div className="flex items-center gap-3 px-8 py-3 bg-blue-500 text-white rounded-lg">
+            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            <span className="font-medium">Processing {totalRows.toLocaleString()} rows...</span>
+          </div>
+        ) : (
+          <button onClick={handleProcess} className={"px-8 py-3 rounded-lg font-semibold shadow-md hover:shadow-lg transition-all text-lg " + (allValid ? "bg-green-600 text-white hover:bg-green-700" : "bg-amber-600 text-white hover:bg-amber-700")}>{allValid ? "Process Data" : "Process Anyway (skip errors)"}</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+===== fuzzyMatch.ts =====
+function similarity(a: string, b: string): number {
+  const aLower = a.toLowerCase().replace(/[_\-\.]/g, " ").trim();
+  const bLower = b.toLowerCase().replace(/[_\-\.]/g, " ").trim();
+  if (aLower === bLower) return 1;
+  if (aLower.includes(bLower) || bLower.includes(aLower)) return 0.85;
+  // Token overlap
+  const aTokens = new Set(aLower.split(/\s+/));
+  const bTokens = new Set(bLower.split(/\s+/));
+  let overlap = 0;
+  for (const t of aTokens) { if (bTokens.has(t)) overlap++; }
+  const tokenScore = overlap / Math.max(aTokens.size, bTokens.size);
+  if (tokenScore >= 0.5) return 0.6 + tokenScore * 0.3;
+  // Levenshtein
+  const matrix: number[][] = [];
+  for (let i = 0; i <= aLower.length; i++) { matrix[i] = [i]; }
+  for (let j = 0; j <= bLower.length; j++) { matrix[0][j] = j; }
+  for (let i = 1; i <= aLower.length; i++) {
+    for (let j = 1; j <= bLower.length; j++) {
+      const cost = aLower[i - 1] === bLower[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+    }
+  }
+  const maxLen = Math.max(aLower.length, bLower.length);
+  if (maxLen === 0) return 1;
+  return 1 - matrix[aLower.length][bLower.length] / maxLen;
+}
+
+const ALIASES: Record<string, string[]> = {
+  "Fee Code": [
+    "feecode", "fee_code", "fee code", "feeid", "fee_id", "code", "fee type", "feetype",
+    "fee_type", "transaction_code", "trans_code", "txn_code", "product_code", "fee code",
+  ],
+  "Fee Amount": [
+    "feeamount", "fee_amount", "fee amount", "amount", "fee_amt", "feeamt", "sum", "total",
+    "transaction_amount", "trans_amount", "txn_amount", "net_amount", "gross_amount",
+    "fee amount", "amounttaken", "amount taken", "debtamount", "debt amount",
+  ],
+  "Currency": [
+    "currency", "curr", "ccy", "currency_code", "currencycode", "cur", "transaction_currency",
+    "txn_currency", "original_currency", "orig_currency", "payment_currency", "fee_currency",
+  ],
+  "Transaction Date": [
+    "transactiondate", "transaction_date", "transaction date", "txn_date", "txndate",
+    "date", "trans_date", "posting_date", "value_date", "trade_date", "settlement_date",
+    "effective_date", "process_date", "created_date", "entry_date",
+  ],
+  "Rate Date": [
+    "rate date", "rate_date", "ratedate", "starting date", "starting_date", "startingdate",
+    "date", "effective_date", "exchange_date", "fx_date", "value_date", "valid_date",
+    "from_date", "as_of_date",
+  ],
+  "Currency Code": [
+    "currency code", "currency_code", "currencycode", "curr_code", "ccy", "curr",
+    "currency", "iso_currency", "from_currency", "source_currency",
+    "relational currency code", "relational_currency_code",
+  ],
+  "Exchange Rate": [
+    "exchange rate", "exchange_rate", "exchangerate", "exch_rate", "rate", "fx_rate",
+    "avg rate", "average_rate", "conversion_rate", "spot_rate", "mid_rate",
+    "relational exch. rate amount", "relational exch rate amount",
+    "relational_exch_rate_amount", "exchange rate amount", "exchange_rate_amount",
+    "fix exchange rate amount", "adjustment exch. rate amount",
+    "relational adjmt exch rate amt", "fxrate", "fx rate",
+  ],
+  "GL Amount (USD)": [
+    "gl_amount", "glamount", "gl amount", "gl_amount_usd", "gl amount usd",
+    "ledger_amount", "book_amount", "gl amount (usd)", "usd_amount", "amount_usd",
+    "usdequivalentfxconversionfeeamount", "usd equivalent", "usd_equivalent",
+  ],
+};
+
+export function autoDetectMapping(
+  systemFields: string[],
+  fileColumns: string[]
+): { mapping: Record<string, string | null>; confidence: Record<string, number> } {
+  const mapping: Record<string, string | null> = {};
+  const confidence: Record<string, number> = {};
+  const usedColumns = new Set<string>();
+  // First pass: exact alias matches (highest priority)
+  for (const sysField of systemFields) {
+    const aliases = ALIASES[sysField] || [];
+    let bestMatch: string | null = null;
+    let bestScore = 0;
+    for (const col of fileColumns) {
+      if (usedColumns.has(col)) continue;
+      const colNorm = col.toLowerCase().replace(/[_\-\.]/g, " ").trim();
+      // Exact alias match
+      if (aliases.includes(colNorm)) {
+        if (0.98 > bestScore) { bestScore = 0.98; bestMatch = col; }
+        continue;
+      }
+      // Partial alias match (alias contained in column name or vice versa)
+      for (const alias of aliases) {
+        if (colNorm.includes(alias) || alias.includes(colNorm)) {
+          const score = 0.85;
+          if (score > bestScore) { bestScore = score; bestMatch = col; }
+        }
+      }
+    }
+    if (bestMatch && bestScore >= 0.8) {
+      mapping[sysField] = bestMatch;
+      confidence[sysField] = bestScore;
+      usedColumns.add(bestMatch);
+    }
+  }
+  // Second pass: fuzzy matching for unmapped fields
+  for (const sysField of systemFields) {
+    if (mapping[sysField]) continue;
+    let bestMatch: string | null = null;
+    let bestScore = 0;
+    for (const col of fileColumns) {
+      if (usedColumns.has(col)) continue;
+      const score = similarity(sysField, col);
+      if (score > bestScore && score >= 0.4) { bestScore = score; bestMatch = col; }
+      // Also check aliases for fuzzy
+      const aliases = ALIASES[sysField] || [];
+      for (const alias of aliases) {
+        const aliasScore = similarity(alias, col);
+        if (aliasScore > bestScore && aliasScore >= 0.5) { bestScore = aliasScore; bestMatch = col; }
+      }
+    }
+    if (bestMatch && bestScore >= 0.4) {
+      mapping[sysField] = bestMatch;
+      confidence[sysField] = bestScore;
+      usedColumns.add(bestMatch);
+    } else {
+      mapping[sysField] = null;
+      confidence[sysField] = 0;
+    }
+  }
+  return { mapping, confidence };
+}
+
+export function getFieldHelp(fieldName: string): string {
+  const help: Record<string, string> = {
+    "Fee Code": "The unique identifier for each fee type. This is used to group and summarize transactions. Common formats: numeric codes (3004, 3032) or alphanumeric (FEE-001).",
+    "Fee Amount": "The transaction amount in its original (local) currency. This will be converted to USD using the exchange rate. Can be positive or negative.",
+    "Currency": "The 3-letter ISO currency code of the transaction (e.g., USD, EUR, GBP, JPY). Must match the currency codes in your exchange rate file.",
+    "Transaction Date": "The date when the transaction occurred. Used to find the matching daily exchange rate. Supported formats: YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, Excel serial dates.",
+    "Rate Date": "The date for which the exchange rate is valid. Each row should have one date, one currency, and one rate. Format should match transaction dates.",
+    "Currency Code": "The 3-letter ISO currency code in the exchange rate file. Must match the currency codes used in fee transaction files.",
+    "Exchange Rate": "The exchange rate to convert from the local currency to USD. For example, if 1 EUR = 1.08 USD, the rate should be 1.08. Also known as: Relational Exch. Rate Amount.",
+    "GL Amount (USD)": "The General Ledger amount in USD for comparison. Used to verify that the calculated fee amounts match the booked amounts in the ledger.",
+  };
+  return help[fieldName] || "Map this field to the corresponding column in your file.";
+}
+
+===== processing.ts =====
+import type { ColumnMapping, FileData, ProcessingResults, SummaryRow, DetailedRow } from "../types";
+
+interface ExchangeRateMap { [key: string]: number; }
+
+function normalizeDate(value: unknown): string {
+  if (!value) return "";
+  const str = String(value).trim();
+  // Handle Excel serial dates
+  const num = Number(str);
+  if (!isNaN(num) && num > 30000 && num < 60000) {
+    const excelEpoch = new Date(1899, 11, 30);
+    const d = new Date(excelEpoch.getTime() + num * 86400000);
+    return d.toISOString().slice(0, 10);
+  }
+  // Handle "2025-01-15 00:00:00" format
+  if (str.includes(" ")) {
+    const datePart = str.split(" ")[0];
+    const parsed = new Date(datePart);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  }
+  // Handle various date formats
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  // Handle DD/MM/YYYY
+  const parts = str.split(/[\/\-\.]/);
+  if (parts.length === 3) {
+    const [a, b, c] = parts;
+    if (Number(a) > 12) {
+      const d = new Date(Number(c), Number(b) - 1, Number(a));
+      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    }
+  }
+  return str;
+}
+
+export function detectColumnType(values: unknown[]): { type: "text" | "numeric" | "date"; sample: string } {
+  let numCount = 0, dateCount = 0, textCount = 0;
+  const samples: string[] = [];
+  for (const val of values.slice(0, 50)) {
+    if (val === null || val === undefined || String(val).trim() === "") continue;
+    const str = String(val).trim();
+    samples.push(str);
+    const num = Number(str);
+    if (!isNaN(num) && str !== "") {
+      if (num > 30000 && num < 60000) { dateCount++; }
+      else { numCount++; }
+      continue;
+    }
+    const d = new Date(str);
+    if (!isNaN(d.getTime()) && str.length > 5) { dateCount++; continue; }
+    if (str.match(/^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}$/)) { dateCount++; continue; }
+    textCount++;
+  }
+  const total = numCount + dateCount + textCount;
+  if (total === 0) return { type: "text", sample: "" };
+  if (dateCount / total > 0.5) return { type: "date", sample: samples[0] || "" };
+  if (numCount / total > 0.5) return { type: "numeric", sample: samples[0] || "" };
+  return { type: "text", sample: samples[0] || "" };
+}
+
+function buildExchangeRateMap(exchangeData: Record<string, unknown>[], mapping: ColumnMapping): { rates: ExchangeRateMap; currencies: Set<string>; dates: Set<string> } {
+  const rates: ExchangeRateMap = {};
+  const currencies = new Set<string>();
+  const dates = new Set<string>();
+  const dateCol = mapping["Rate Date"];
+  const currCol = mapping["Currency Code"];
+  const rateCol = mapping["Exchange Rate"];
+  if (!currCol || !rateCol) return { rates, currencies, dates };
+  for (const row of exchangeData) {
+    const curr = String(row[currCol] || "").trim().toUpperCase();
+    const rate = parseFloat(String(row[rateCol] || "0"));
+    if (!curr || isNaN(rate) || rate <= 0) continue;
+    currencies.add(curr);
+    if (dateCol && row[dateCol]) {
+      const dateStr = normalizeDate(row[dateCol]);
+      if (dateStr) {
+        dates.add(dateStr);
+        const key = curr + "|" + dateStr;
+        rates[key] = rate;
+      }
+    } else {
+      rates[curr] = rate;
+    }
+  }
+  if (!rates["USD"] && !Object.keys(rates).some((k) => k.startsWith("USD|"))) {
+    currencies.add("USD");
+    if (dates.size > 0) {
+      for (const d of dates) { rates["USD|" + d] = 1; }
+    } else {
+      rates["USD"] = 1;
+    }
+  }
+  return { rates, currencies, dates };
+}
+
+function findRate(rates: ExchangeRateMap, currency: string, date: string, hasDates: boolean): { rate: number | null; method: string } {
+  if (currency === "USD") return { rate: 1, method: "base" };
+  if (hasDates && date) {
+    const exactKey = currency + "|" + date;
+    if (rates[exactKey] !== undefined) return { rate: rates[exactKey], method: "exact" };
+    // Try nearby dates (up to 7 days)
+    const d = new Date(date);
+    for (let i = 1; i <= 7; i++) {
+      const before = new Date(d.getTime() - i * 86400000).toISOString().slice(0, 10);
+      const after = new Date(d.getTime() + i * 86400000).toISOString().slice(0, 10);
+      if (rates[currency + "|" + before] !== undefined) return { rate: rates[currency + "|" + before], method: "nearby(-" + i + "d)" };
+      if (rates[currency + "|" + after] !== undefined) return { rate: rates[currency + "|" + after], method: "nearby(+" + i + "d)" };
+    }
+    return { rate: null, method: "missing" };
+  }
+  if (rates[currency] !== undefined) return { rate: rates[currency], method: "average" };
+  return { rate: null, method: "missing" };
+}
+
+export interface ProcessingError {
+  row: number;
+  feeCode: string;
+  currency: string;
+  date: string;
+  file: string;
+  message: string;
+}
+
+export interface EnhancedProcessingResults extends ProcessingResults {
+  errors: ProcessingError[];
+  currencyTotals: { currency: string; totalLocal: number; totalUSD: number; records: number; avgRate: number }[];
+  exchangeRateUsed: boolean;
+  grandTotalUSD: number;
+}
+
+interface FeeRecord { feeCode: string; feeAmount: number; currency: string; date: string; feeAmountUSD: number; rateUsed: number; rateMethod: string; fileName: string; }
+
+export function processData(
+  feeFiles: FileData[],
+  feeMappings: Record<string, ColumnMapping>,
+  exchangeFile: FileData,
+  exchangeMapping: ColumnMapping,
+  glFile?: FileData,
+  glMapping?: ColumnMapping
+): EnhancedProcessingResults {
+  const { rates, currencies: exCurrencies, dates: exDates } = buildExchangeRateMap(exchangeFile.data, exchangeMapping);
+  const hasDates = exDates.size > 0;
+  const allRecords: FeeRecord[] = [];
+  const errors: ProcessingError[] = [];
+  let rowNum = 0;
+  for (const file of feeFiles) {
+    const mapping = feeMappings[file.name];
+    if (!mapping) continue;
+    const feeCodeCol = mapping["Fee Code"];
+    const feeAmountCol = mapping["Fee Amount"];
+    const currencyCol = mapping["Currency"];
+    const dateCol = mapping["Transaction Date"];
+    if (!feeCodeCol || !feeAmountCol || !currencyCol) continue;
+    for (const row of file.data) {
+      rowNum++;
+      const feeCode = String(row[feeCodeCol] || "").trim();
+      const feeAmountRaw = String(row[feeAmountCol] || "0").replace(/,/g, "");
+      const feeAmount = parseFloat(feeAmountRaw);
+      const currency = String(row[currencyCol] || "").trim().toUpperCase();
+      const dateRaw = dateCol ? row[dateCol] : null;
+      const dateStr = dateRaw ? normalizeDate(dateRaw) : "";
+      if (!feeCode) { errors.push({ row: rowNum, feeCode: "(empty)", currency, date: dateStr, file: file.name, message: "Missing Fee Code" }); continue; }
+      if (isNaN(feeAmount)) { errors.push({ row: rowNum, feeCode, currency, date: dateStr, file: file.name, message: "Invalid Fee Amount: " + String(row[feeAmountCol]) }); continue; }
+      if (!currency) { errors.push({ row: rowNum, feeCode, currency: "(empty)", date: dateStr, file: file.name, message: "Missing Currency" }); continue; }
+      const { rate, method } = findRate(rates, currency, dateStr, hasDates);
+      if (rate === null) {
+        errors.push({ row: rowNum, feeCode, currency, date: dateStr, file: file.name, message: "No exchange rate found for " + currency + " on " + (dateStr || "N/A") + ". Please check exchange rate file." });
+        continue;
+      }
+      const feeAmountUSD = feeAmount * rate;
+      allRecords.push({ feeCode, feeAmount, currency, date: dateStr, feeAmountUSD, rateUsed: rate, rateMethod: method, fileName: file.name });
+    }
+  }
+  // Summary by Fee Code
+  const summaryMap = new Map<string, { records: number; sumUSD: number }>();
+  for (const rec of allRecords) {
+    const existing = summaryMap.get(rec.feeCode) || { records: 0, sumUSD: 0 };
+    existing.records += 1;
+    existing.sumUSD += rec.feeAmountUSD;
+    summaryMap.set(rec.feeCode, existing);
+  }
+  // Detailed by Fee Code + Currency
+  const detailedMap = new Map<string, DetailedRow>();
+  for (const rec of allRecords) {
+    const key = rec.feeCode + "|" + rec.currency;
+    const existing = detailedMap.get(key) || { feeCode: rec.feeCode, currency: rec.currency, records: 0, sumFeeAmount: 0, sumFeeAmountUSD: 0 };
+    existing.records += 1;
+    existing.sumFeeAmount += rec.feeAmount;
+    existing.sumFeeAmountUSD += rec.feeAmountUSD;
+    detailedMap.set(key, existing);
+  }
+  // Currency totals
+  const currTotalMap = new Map<string, { totalLocal: number; totalUSD: number; records: number; rates: number[] }>();
+  for (const rec of allRecords) {
+    const existing = currTotalMap.get(rec.currency) || { totalLocal: 0, totalUSD: 0, records: 0, rates: [] };
+    existing.totalLocal += rec.feeAmount;
+    existing.totalUSD += rec.feeAmountUSD;
+    existing.records += 1;
+    existing.rates.push(rec.rateUsed);
+    currTotalMap.set(rec.currency, existing);
+  }
+  const currencyTotals = Array.from(currTotalMap.entries()).map(([currency, data]) => ({
+    currency,
+    totalLocal: Math.round(data.totalLocal * 100) / 100,
+    totalUSD: Math.round(data.totalUSD * 100) / 100,
+    records: data.records,
+    avgRate: Math.round((data.rates.reduce((a, b) => a + b, 0) / data.rates.length) * 1000000) / 1000000,
+  })).sort((a, b) => b.totalUSD - a.totalUSD);
+  // GL comparison
+  const glLookup = new Map<string, number>();
+  if (glFile && glMapping) {
+    const glFeeCodeCol = glMapping["Fee Code"];
+    const glAmountCol = glMapping["GL Amount (USD)"];
+    if (glFeeCodeCol && glAmountCol) {
+      for (const row of glFile.data) {
+        const feeCode = String(row[glFeeCodeCol] || "").trim();
+        const amountRaw = String(row[glAmountCol] || "0").replace(/,/g, "");
+        const amount = parseFloat(amountRaw);
+        if (feeCode && !isNaN(amount)) {
+          const existing = glLookup.get(feeCode) || 0;
+          glLookup.set(feeCode, existing + amount);
+        }
+      }
+    }
+  }
+  const summary: SummaryRow[] = [];
+  for (const [feeCode, data] of summaryMap.entries()) {
+    const row: SummaryRow = { feeCode, records: data.records, sumFeeAmountUSD: Math.round(data.sumUSD * 100) / 100 };
+    if (glLookup.size > 0) {
+      const glAmount = glLookup.get(feeCode);
+      if (glAmount !== undefined) {
+        row.glAmountUSD = Math.round(glAmount * 100) / 100;
+        row.difference = Math.round((row.sumFeeAmountUSD - row.glAmountUSD) * 100) / 100;
+        row.differencePercent = row.glAmountUSD !== 0 ? Math.round((row.difference / row.glAmountUSD) * 10000) / 100 : 0;
+        row.status = Math.abs(row.difference) < 1 ? "match" : Math.abs(row.difference) < 100 ? "minor" : "mismatch";
+      } else {
+        row.glAmountUSD = 0;
+        row.difference = row.sumFeeAmountUSD;
+        row.status = "mismatch";
+      }
+    }
+    summary.push(row);
+  }
+  summary.sort((a, b) => a.feeCode.localeCompare(b.feeCode));
+  const detailed = Array.from(detailedMap.values()).sort((a, b) => a.feeCode.localeCompare(b.feeCode) || a.currency.localeCompare(b.currency));
+  const uniqueCurrencies = new Set(allRecords.map((r) => r.currency));
+  const grandTotalUSD = Math.round(allRecords.reduce((s, r) => s + r.feeAmountUSD, 0) * 100) / 100;
+  return {
+    summary,
+    detailed,
+    totalRecords: allRecords.length,
+    totalAmountUSD: grandTotalUSD,
+    feeCodesCount: summaryMap.size,
+    currenciesCount: uniqueCurrencies.size,
+    errors,
+    currencyTotals,
+    exchangeRateUsed: hasDates,
+    grandTotalUSD,
+  };
+}
+
+===== index.ts =====
+export type AppStep = 1 | 2 | 3 | 4;
+
+export interface FileData {
+  name: string;
+  data: Record<string, unknown>[];
+  columns: string[];
+  rowCount: number;
+}
+
+export interface ColumnMapping {
+  [fieldName: string]: string | null;
+}
+
+export interface SavedMapping {
+  id: string;
+  name: string;
+  mapping: ColumnMapping;
+  savedAt: string;
+}
+
+export interface SummaryRow {
+  feeCode: string;
+  records: number;
+  sumFeeAmountUSD: number;
+  glAmountUSD?: number;
+  difference?: number;
+  differencePercent?: number;
+  status?: "match" | "minor" | "mismatch";
+}
+
+export interface DetailedRow {
+  feeCode: string;
+  currency: string;
+  records: number;
+  sumFeeAmount: number;
+  sumFeeAmountUSD: number;
+}
+
+export interface ProcessingResults {
+  summary: SummaryRow[];
+  detailed: DetailedRow[];
+  totalRecords: number;
+  totalAmountUSD: number;
+  feeCodesCount: number;
+  currenciesCount: number;
+}
+
+export interface LoadingState {
+  isLoading: boolean;
+  stage: string;
+  progress: number;
+  detail: string;
+}
+
+export interface ValidationIssue {
+  severity: "error" | "warning" | "info";
+  field: string;
+  message: string;
+  suggestion?: string;
+}
+
+export interface FileValidation {
+  fileName: string;
+  issues: ValidationIssue[];
+  isValid: boolean;
+  stats: {
+    totalRows: number;
+    emptyRows: number;
+    uniqueValues: Record<string, number>;
+    nullCounts: Record<string, number>;
+    sampleValues: Record<string, string[]>;
+  };
+}
+
