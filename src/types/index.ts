@@ -1,10 +1,4 @@
-export interface SystemField {
-  name: string;
-  description: string;
-  type: "text" | "numeric" | "date";
-  required: boolean;
-  examples: string;
-}
+export type AppStep = 1 | 2 | 3 | 4;
 
 export interface FileData {
   name: string;
@@ -14,16 +8,14 @@ export interface FileData {
 }
 
 export interface ColumnMapping {
-  [systemField: string]: string | null;
+  [fieldName: string]: string | null;
 }
 
-export interface FileMappingState {
-  [filename: string]: ColumnMapping;
-}
-
-export interface AutoDetectResult {
+export interface SavedMapping {
+  id: string;
+  name: string;
   mapping: ColumnMapping;
-  confidence: { [systemField: string]: number };
+  savedAt: string;
 }
 
 export interface SummaryRow {
@@ -53,11 +45,29 @@ export interface ProcessingResults {
   currenciesCount: number;
 }
 
-export interface SavedMapping {
-  id: string;
-  name: string;
-  mapping: ColumnMapping;
-  savedAt: string;
+export interface LoadingState {
+  isLoading: boolean;
+  stage: string;
+  progress: number;
+  detail: string;
 }
 
-export type AppStep = 1 | 2 | 3 | 4;
+export interface ValidationIssue {
+  severity: "error" | "warning" | "info";
+  field: string;
+  message: string;
+  suggestion?: string;
+}
+
+export interface FileValidation {
+  fileName: string;
+  issues: ValidationIssue[];
+  isValid: boolean;
+  stats: {
+    totalRows: number;
+    emptyRows: number;
+    uniqueValues: Record<string, number>;
+    nullCounts: Record<string, number>;
+    sampleValues: Record<string, string[]>;
+  };
+}
